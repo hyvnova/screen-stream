@@ -1,0 +1,2 @@
+start "./target/debug/screen-stream.exe" "connect 127.0.0.1:8080" &&
+start "./target/debug/screen-stream.exe" "start"
