@@ -1,11 +1,9 @@
 #![allow(clippy::unnecessary_wraps)]
 
-use once_cell::sync::Lazy;
 use std::{
     io,
     net::UdpSocket,
     process::exit,
-    sync::{Arc, Mutex},
 };
 
 use crate::{
@@ -19,59 +17,45 @@ use ggez::{
     Context, GameResult,
 };
 
-const CHUNK_SIZE: usize = Packet::CHUNK_SIZE;
-
-#[allow(non_upper_case_globals)]
-
-/// recv_data will run in parallel with update thus it needs to share data with update
-/// We will use a global variable to share data between the two functions
-/// recv_data fills it, update consumes it
-static mut frames_mutex: Lazy<Arc<Mutex<FrameBuffer>>> =
-    Lazy::new(|| Arc::new(Mutex::new(FrameBuffer::new())));
-
 struct MainState {
     texture: Option<graphics::Image>,
+    frames: FrameBuffer,
+    socket: UdpSocket
 }
 
 impl MainState {
-    fn new(_ctx: &mut Context) -> GameResult<MainState> {
+    fn new(socket:UdpSocket, _ctx: &mut Context) -> GameResult<MainState> {
         _ctx.gfx
             .set_resizable(true)
             .expect("Error setting window to resizable");
         _ctx.gfx.set_window_title("Screen Stream Client");
 
-        Ok(MainState { texture: None })
+        
+
+        Ok(MainState { 
+            texture: None,
+            frames: FrameBuffer::new(),
+            socket
+        })
     }
 }
 
-// * Data recv (runs in parallel with update)
-fn recv_data(address: String, port: u16) {
-    let socket: UdpSocket =
-        UdpSocket::bind(format!("0.0.0.0:{}", port)).expect("Error binding to address");
-
-    // socket.set_nonblocking(true).expect("Error setting socket to non-blocking");
-    socket
-        .connect(&address)
-        .expect("Error connecting to address");
-
-    // 1 = Connection notification
-    socket
-        .send(&[1u8; 1])
-        .expect("Error sending connection notification to server");
-
-    println!("Connected to: {}", address);
-
-    // Check if stream is still open
-    if socket.send(&[0u8; 1]).is_err() {
-        println!("Stream is closed");
-        exit(0);
+impl event::EventHandler<ggez::GameError> for MainState {
+    fn quit_event(&mut self, _ctx: &mut Context) -> Result<bool, ggez::GameError> {
+        return Ok(false);
     }
 
-    // * Frame will be sent in packets of CHUNK_SIZE
-    loop {
+    fn update(&mut self, ctx: &mut Context) -> GameResult {
+        // Check if stream is still open
+        if self.socket.send(&[0u8; 1]).is_err() {
+            println!("Stream is closed");
+            exit(0);
+        }
+
+        // * Frame will be sent in packets of CHUNK_SIZE
         let mut buffer = [0u8; 65000 * 1];
 
-        match socket.recv(&mut buffer) {
+        match self.socket.recv(&mut buffer) {
             Ok(bytes_read) => {
                 // println!("Bytes read: {}", bytes_read);
 
@@ -83,60 +67,51 @@ fn recv_data(address: String, port: u16) {
                 // If not even minimum bytes are read
                 else if bytes_read < Packet::META_SIZE {
                     eprintln!("Invalid packet received");
-                    continue;
+                    return Ok(());
                 }
 
-                let mut frames = unsafe { frames_mutex.lock() }.unwrap();
-
-                // If 1 packet
-                if bytes_read <= CHUNK_SIZE {
+                if bytes_read <= Packet::CHUNK_SIZE {
                     let packet = Packet::from_bytes(buffer[..bytes_read].to_vec());
-                    println!(
-                        "Single packet received frame: {} index: {}",
-                        packet.frame_id, packet.index
-                    );
+                    // println!(
+                    //     "Single packet received frame: {} index: {}",
+                    //     packet.frame_id, packet.index
+                    // );
 
-                    frames.add_packet(packet);
-
-                    if bytes_read < CHUNK_SIZE {
-                        // println!("Last packet received");
-                        continue;
-                    }
-                    continue;
+                    self.frames.add_packet(packet);
                 }
 
-                // * If multiple packets are received
-                // Split the buffer into packets
-                let mut index = 0;
-                while index < bytes_read {
-                    // At least meta size bytes are required
-                    if index + Packet::META_SIZE > bytes_read {
-                        break;
-                    }
+                // // * If multiple packets are received
+                // // Split the buffer into packets
+                // let mut index = 0;
+                // while index < bytes_read {
+                //     // At least meta size bytes are required
+                //     if index + Packet::META_SIZE > bytes_read {
+                //         break;
+                //     }
 
-                    let end = std::cmp::min(index + CHUNK_SIZE, bytes_read);
-                    let packet = Packet::from_bytes(buffer[index..end].to_vec());
+                //     let end = std::cmp::min(index + Packet::CHUNK_SIZE, bytes_read);
+                //     let packet = Packet::from_bytes(buffer[index..end].to_vec());
 
-                    frames.add_packet(packet);
+                //     self.frames.add_packet(packet);
 
-                    index = end;
+                //     index = end;
 
-                    // If last packet is less than 4096 bytes
-                    if end == bytes_read {
-                        break;
-                    }
-                }
-                drop(frames); // Release the lock
+                //     // If last packet is less than 4096 bytes
+                //     if end == bytes_read {
+                //         break;
+                //     }
+                // }
             }
             Err(e) => {
                 match e.kind() {
                     io::ErrorKind::WouldBlock => {
                         // println!("No data available");
-                        continue;
                     }
                     io::ErrorKind::ConnectionReset => {
                         println!("Connection reset by server");
-                        exit(0);
+                        self.socket
+                            .send(&[0u8; 1])
+                            .expect("Error sending connection reset notification to server");
                     }
                     _ => {
                         eprintln!("Error receiving data: {:?}", e);
@@ -145,27 +120,17 @@ fn recv_data(address: String, port: u16) {
                 }
             }
         }
-    }
-}
-
-impl event::EventHandler<ggez::GameError> for MainState {
-    fn quit_event(&mut self, _ctx: &mut Context) -> Result<bool, ggez::GameError> {
-        return Ok(false);
-    }
-
-    fn update(&mut self, ctx: &mut Context) -> GameResult {
-        let mut frames = unsafe { frames_mutex.lock() }.unwrap();
 
         // No frames -> return
-        if frames.len() == 0 {
+        if self.frames.len() == 0 {
             return Ok(());
         }
 
-        println!("Frame buffer count: {}", frames.len());
+        // println!("Frame buffer count: {}", self.frames.len());
 
         // Sort frames by frame_id (low to high)
 
-        let buffer = match frames.get_frame() {
+        let buffer = match self.frames.get_frame() {
             GetFrameResult::NoFrame => {
                 return Ok(());
             }
@@ -229,12 +194,24 @@ pub fn run(address: String) -> GameResult {
     let cb: ggez::ContextBuilder = ggez::ContextBuilder::new("ss-client", "nova");
     let (mut ctx, event_loop) = cb.build()?;
 
-    let state = MainState::new(&mut ctx)?;
 
-    // Run data receiver in parallel
-    std::thread::spawn(move || {
-        recv_data(address, 8990);
-    });
+    let socket: UdpSocket = UdpSocket::bind(format!("0.0.0.0:{}", 8899))
+        .expect("Error binding to address");
+
+    socket.set_nonblocking(true).expect("Error setting socket to non-blocking");
+
+    socket
+        .connect(&address)
+        .expect("Error connecting to address");
+
+    // 1 = Connection notification
+    socket
+        .send(&[1u8; 1])
+        .expect("Error sending connection notification to server");
+
+    println!("Connected to: {}", address);
+
+    let state = MainState::new(socket, &mut ctx)?;
 
     event::run(ctx, event_loop, state);
 }

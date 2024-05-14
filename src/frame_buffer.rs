@@ -21,7 +21,7 @@ pub enum GetFrameResult {
 }
 
 impl FrameBuffer {
-    const MAX_FRAMES: usize = 3;
+    const MAX_FRAMES: usize = 2;
 
     pub fn new() -> Self {
         Self {
@@ -118,10 +118,10 @@ impl FrameBuffer {
         let mut buffer: Vec<u8> = Vec::with_capacity(buffer_size.into());
 
         for packet in packets {
-            println!(
-                "Building frame: {} index: {}",
-                packet.frame_id, packet.index
-            );
+            // println!(
+            //     "Building frame: {} index: {}",
+            //     packet.frame_id, packet.index
+            // );
             buffer.extend_from_slice(&packet.data);
         }
 

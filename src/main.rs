@@ -1,9 +1,12 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Command};
 
 mod client;
 pub mod packet;
 mod server;
 pub mod frame_buffer;
+pub mod commands;
+
+use commands::Cmds;
 
 #[derive(Parser)]
 #[command(
@@ -17,31 +20,13 @@ struct Cli {
     cmd: Cmds,
 }
 
-#[derive(Subcommand)]
-enum Cmds {
-    #[command(about = "Start streaming server")]
-    Start(StartCmd), // ss start -p <port | default = 8080>
-    #[command(about = "Connect to a (streaming) server")]
-    Connect(ConnectCmd), // ss connect -a <ip>:<port>
-}
-
-#[derive(Args)]
-struct StartCmd {
-    #[arg(short, long, default_value = "8080")]
-    port: u16,
-}
-
-#[derive(Args)]
-struct ConnectCmd {
-    address: String,
-}
 
 fn main() {
     let cli = Cli::parse();
 
     match cli.cmd {
-        Cmds::Start(start) => {
-            server::run(start.port);
+        Cmds::Start(options) => {
+            server::run(options);
         }
 
         Cmds::Connect(connect) => {
