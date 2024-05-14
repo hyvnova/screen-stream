@@ -26,18 +26,7 @@ pub struct Capture {
     clients: Vec<SocketAddr>
 }
 
-
-use jpeg_encoder::{EncodingError, Encoder, ColorType};
-
-fn compress_jpeg(data: &[u8], width: u32, height: u32, quality: u8) -> Result<Vec<u8>, EncodingError> {
-    let mut jpeg_data = Vec::new();
-    
-    let encoder = Encoder::new(&mut jpeg_data, quality);
-    match encoder.encode(data, width.try_into().unwrap(), height.try_into().unwrap(), ColorType::Rgba) {
-        Ok(_) => Ok(jpeg_data),
-        Err(e) => Err(e)
-    }
-}
+use turbojpeg;
 
 
 impl GraphicsCaptureApiHandler for Capture {
@@ -120,9 +109,9 @@ impl GraphicsCaptureApiHandler for Capture {
         }
 
         // * Prepare buffer for encoding
-        let width = frame.buffer().unwrap().width();
-        let height = frame.buffer().unwrap().height();
         let mut buffer = frame.buffer().expect("Error getting frame buffer");
+        let width = buffer.width();
+        let height = buffer.height();
 
         // * Encode frame as jpeg 
         let bytes = ImageEncoder::new(ImageFormat::Jpeg, ColorFormat::Rgba8)
@@ -132,7 +121,10 @@ impl GraphicsCaptureApiHandler for Capture {
         println!("Frame Size: {}", bytes.len());
 
         // * Compress frame
-        let bytes = compress_jpeg(&bytes, width, height, 10).expect("Error compressing jpeg");
+        let image = turbojpeg::decompress(&bytes, turbojpeg::PixelFormat::RGBA).expect("Error decompressing frame");
+
+        let bytes = turbojpeg::compress(image.as_deref(), 10, turbojpeg::Subsamp::Sub1x2).expect("Error compressing frame");
+
         println!("Compressed Frame Size: {}", bytes.len());
 
         let mut clients_to_remove: Vec<SocketAddr> = Vec::new();

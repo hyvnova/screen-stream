@@ -1,9 +1,8 @@
-//! The simplest possible example that does something.
 #![allow(clippy::unnecessary_wraps)]
 
 use once_cell::sync::Lazy;
 use std::{
-    io::{self, Write},
+    io,
     net::UdpSocket,
     process::exit,
     sync::{Arc, Mutex},
@@ -46,7 +45,22 @@ impl MainState {
 }
 
 // * Data recv (runs in parallel with update)
-fn recv_data(socket: &UdpSocket) {
+fn recv_data(address: String, port: u16) {
+    let socket: UdpSocket =
+        UdpSocket::bind(format!("0.0.0.0:{}", port)).expect("Error binding to address");
+
+    // socket.set_nonblocking(true).expect("Error setting socket to non-blocking");
+    socket
+        .connect(&address)
+        .expect("Error connecting to address");
+
+    // 1 = Connection notification
+    socket
+        .send(&[1u8; 1])
+        .expect("Error sending connection notification to server");
+
+    println!("Connected to: {}", address);
+
     // Check if stream is still open
     if socket.send(&[0u8; 1]).is_err() {
         println!("Stream is closed");
@@ -212,19 +226,6 @@ impl event::EventHandler<ggez::GameError> for MainState {
 }
 
 pub fn run(address: String) -> GameResult {
-    let socket: UdpSocket = UdpSocket::bind("0.0.0.0:08899").expect("Error binding to address");
-    // socket.set_nonblocking(true).expect("Error setting socket to non-blocking");
-    socket
-        .connect(&address)
-        .expect("Error connecting to address");
-
-    // 1 = Connection notification
-    socket
-        .send(&[1u8; 1])
-        .expect("Error sending connection notification to server");
-
-    println!("Connected to: {}", address);
-
     let cb: ggez::ContextBuilder = ggez::ContextBuilder::new("ss-client", "nova");
     let (mut ctx, event_loop) = cb.build()?;
 
@@ -232,7 +233,8 @@ pub fn run(address: String) -> GameResult {
 
     // Run data receiver in parallel
     std::thread::spawn(move || {
-        recv_data(&socket);
+        recv_data(address, 8990);
     });
+
     event::run(ctx, event_loop, state);
 }
