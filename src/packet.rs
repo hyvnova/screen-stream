@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 // UDP packet
 pub struct Packet {
     pub index: u8,      // First byte Index of the packet
@@ -7,7 +9,9 @@ pub struct Packet {
 
 impl Packet {
     pub const META_SIZE : usize = 5;
-    pub const CHUNK_SIZE : usize = 4096 * 15;
+    
+    // Limit 65507
+    pub const CHUNK_SIZE : usize = 65000;
 
     pub fn new(index: u8, frame_id: u32, data: &[u8]) -> Self {
         Self { index, frame_id, data: data.to_vec() }
@@ -25,6 +29,35 @@ impl Packet {
             index: bytes[0],
             frame_id: u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]),
             data: bytes[5..].to_vec(),
+        }
+    }
+}
+
+
+impl PartialOrd for Packet {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // Different frame_id -> Not comparable
+        if self.frame_id != other.frame_id {
+            return None;
+        }
+
+        // Compare index
+        self.index.partial_cmp(&other.index)
+    }
+}
+
+impl PartialEq for Packet {
+    fn eq(&self, other: &Self) -> bool {    
+        self.index == other.index && self.frame_id == other.frame_id
+    }
+}
+
+impl Clone for Packet {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index,
+            frame_id: self.frame_id,
+            data: self.data.clone(),
         }
     }
 }

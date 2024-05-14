@@ -1284,6 +1284,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-encoder"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fefe5a4fb12fa836172dc53cc36c37af693f6197ae702f931faad8774caf926"
+
+[[package]]
 name = "js-sys"
 version = "0.3.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2257,6 +2263,7 @@ dependencies = [
  "clap",
  "ggez",
  "image",
+ "jpeg-encoder",
  "once_cell",
  "tokio",
  "windows-capture",

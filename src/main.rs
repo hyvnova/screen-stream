@@ -3,6 +3,7 @@ use clap::{Args, Parser, Subcommand};
 mod client;
 pub mod packet;
 mod server;
+pub mod frame_buffer;
 
 #[derive(Parser)]
 #[command(

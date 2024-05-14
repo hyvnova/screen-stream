@@ -26,6 +26,20 @@ pub struct Capture {
     clients: Vec<SocketAddr>
 }
 
+
+use jpeg_encoder::{EncodingError, Encoder, ColorType};
+
+fn compress_jpeg(data: &[u8], width: u32, height: u32, quality: u8) -> Result<Vec<u8>, EncodingError> {
+    let mut jpeg_data = Vec::new();
+    
+    let encoder = Encoder::new(&mut jpeg_data, quality);
+    match encoder.encode(data, width.try_into().unwrap(), height.try_into().unwrap(), ColorType::Rgba) {
+        Ok(_) => Ok(jpeg_data),
+        Err(e) => Err(e)
+    }
+}
+
+
 impl GraphicsCaptureApiHandler for Capture {
     // The type of flags used to get the values from the settings.
     type Flags = String;
@@ -110,10 +124,16 @@ impl GraphicsCaptureApiHandler for Capture {
         let height = frame.buffer().unwrap().height();
         let mut buffer = frame.buffer().expect("Error getting frame buffer");
 
-        // * Encode frame as jpeg --- afaik this compress the frame
+        // * Encode frame as jpeg 
         let bytes = ImageEncoder::new(ImageFormat::Jpeg, ColorFormat::Rgba8)
             .encode(buffer.as_raw_nopadding_buffer()?, width, height)
             .expect("Error encoding frame into jpeg");
+
+        println!("Frame Size: {}", bytes.len());
+
+        // * Compress frame
+        let bytes = compress_jpeg(&bytes, width, height, 10).expect("Error compressing jpeg");
+        println!("Compressed Frame Size: {}", bytes.len());
 
         let mut clients_to_remove: Vec<SocketAddr> = Vec::new();
 
@@ -134,19 +154,6 @@ impl GraphicsCaptureApiHandler for Capture {
                     frame_id,
                     data: chunk.to_vec(),
                 };
-
-                match self.listener.send_to(&packet.to_bytes(), client) {
-                    Ok(bytes_send) => {
-                        println!("\nPacket {} : size {}", i, bytes_send);
-                    }
-                    Err(e) => {
-                        println!("Error sending packet to client: {}", e);
-                        clients_to_remove.push(*client);
-                        break;
-                    }
-                }
-
-                std::thread::sleep(std::time::Duration::from_millis(50));
 
                 match self.listener.send_to(&packet.to_bytes(), client) {
                     Ok(bytes_send) => {
