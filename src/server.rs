@@ -2,7 +2,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
 use scrap::{Capturer, Display};
-use turbojpeg::Image;
+use turbojpeg::{Image, PixelFormat, compress};
 
 use crate::comm::Actions;
 use crate::commands;
@@ -31,8 +31,8 @@ pub fn run(options: commands::StartCmd) {
     println!("Server listening on port: {}", options.port);
 
     
-    let width = cap.width() as u32;
-    let height = cap.height() as u32;
+    let width = cap.width();
+    let height = cap.height();
 
     let fps = Duration::from_millis(1000u64 / (options.fps as u64)); // Frame time
     let record_start = std::time::Instant::now(); // Time since recording started
@@ -114,7 +114,13 @@ pub fn run(options: commands::StartCmd) {
         };
 
 
-        let image = image::ImageBuffer::from_raw(width, height, frame.as_rgba()).expect("Error creating image buffer");
+        let image = Image {
+            pixels: &*frame,
+            width,
+            height,
+            format: PixelFormat::BGRX,
+            pitch: width * PixelFormat::BGRX.size(),
+        };
 
         println!("Frame Size: {}", frame.len());
 
@@ -124,7 +130,7 @@ pub fn run(options: commands::StartCmd) {
         //     )
         //     .expect("Error encoding frame");
 
-        let bytes = turbojpeg::compress_image(image, options.quality as i32, turbojpeg::Subsamp::Sub2x2);
+        let bytes = compress(image, options.quality as i32, turbojpeg::Subsamp::Sub2x2).expect("Error compressing image");
 
         println!("Compressed Frame Size: {}", bytes.len());
 
