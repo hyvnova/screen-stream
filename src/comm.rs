@@ -2,7 +2,7 @@
 /// Communication of server and clients
 pub enum Actions {
     // * Unknown action
-    Unknown,
+    Unknown = -1,
 
     // * Ping - Client to server to know if server is still alive
     Ping = 1,
@@ -13,11 +13,6 @@ pub enum Actions {
     // * Disconnection - Client to server to notify of disconnection
     Disconnection = 3,
 
-    // * Request frame - Client to server to request for frame  
-    RequestFrame = 4,
-    
-    // * General ok 
-    GeneralOk = 5,
 } 
 
 impl From<u8> for Actions {
@@ -26,8 +21,6 @@ impl From<u8> for Actions {
             1 => Actions::Ping,
             2 => Actions::NewConnection,
             3 => Actions::Disconnection,
-            4 => Actions::RequestFrame,
-            5 => Actions::GeneralOk,
             _ => Actions::Unknown,
         }
     }

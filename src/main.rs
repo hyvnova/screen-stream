@@ -1,10 +1,11 @@
-use clap::{Parser, Command};
+use clap::{Parser};
 
 mod client;
 pub mod packet;
 mod server;
 pub mod frame_buffer;
 pub mod commands;
+pub mod comm;
 
 use commands::Cmds;
 

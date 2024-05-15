@@ -1,142 +1,140 @@
-use std::{
-    io::{self, Write},
-    net::{SocketAddr, UdpSocket},
-    process::exit,
-    time::Instant,
-};
+use std::net::{SocketAddr, UdpSocket};
+use std::time::Duration;
 
-use windows_capture::{
-    capture::GraphicsCaptureApiHandler,
-    encoder::ImageEncoder,
-    frame::{Frame, ImageFormat},
-    graphics_capture_api::InternalCaptureControl,
-    monitor::Monitor,
-    settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings, Settings},
-};
+use scrap::{Capturer, Display};
+use turbojpeg::Image;
 
-use crate::{commands, packet::Packet};
+use crate::comm::Actions;
+use crate::commands;
+use crate::packet::Packet;
 
-// This struct will be used to handle the capture events.
-pub struct Capture {
-    // The video encoder that will be used to encode the frames.
-    // encoder: Option<VideoEncoder>,
-    // To measure the time the capture has been running
-    pub start: Instant,
-    listener: UdpSocket,
-    clients: Vec<SocketAddr>,
-    options: commands::StartCmd,
-}
+use rgb::*;
 
-use turbojpeg;
+use std::thread::available_parallelism;
+
+pub fn run(options: commands::StartCmd) {
+    let mut cap = Capturer::new(
+        Display::primary()
+        .expect("Failed to find primary display")
+    ).expect("Failed to create capturer");
 
 
-impl GraphicsCaptureApiHandler for Capture {
-    // The type of flags used to get the values from the settings.
-    type Flags = String;
+    let listener = UdpSocket::bind(format!("0.0.0.0:{}", options.port))
+        .expect("While creating UdpSocket: Error binding to port");
 
-    // The type of error that can occur during capture, the error will be returned from `CaptureControl` and `start` functions.
-    type Error = Box<dyn std::error::Error + Send + Sync>;
+    let mut clients = Vec::new(); // Connected clients
 
-    // Function that will be called to create the struct. The flags can be passed from settings.
-    fn new(options_string: Self::Flags) -> Result<Self, Self::Error> {
+    listener
+        .set_nonblocking(true)
+        .expect("Error setting UdpSocket to non-blocking mode");
 
-        // let encoder = VideoEncoder::new(
-        //     VideoEncoderType::Mp4,
-        //     VideoEncoderQuality::HD720p,
-        //     1920,
-        //     1080,
-        //     "./output.mp4",
-        // )?;
+    println!("Server listening on port: {}", options.port);
 
-        let options = commands::StartCmd::parse(options_string);
+    
+    let width = cap.width() as u32;
+    let height = cap.height() as u32;
 
-        let listener = UdpSocket::bind(format!("0.0.0.0:{}", options.port))
-            .expect("While creating UdpSocket: Error binding to port");
-        listener
-            .set_nonblocking(true)
-            .expect("Error setting UdpSocket to non-blocking mode");
+    let fps = Duration::from_millis(1000u64 / (options.fps as u64)); // Frame time
+    let record_start = std::time::Instant::now(); // Time since recording started
 
-        Ok(Self {
-            listener,
-            start: Instant::now(),
-            clients: Vec::new(),
-            options,
-        })
-    }
+    // ! AVIF Encoder -- Very slow
+    // let encoder = ravif::Encoder::new()
+    //         .with_quality(options.quality as f32)
+    //         .with_speed(10)
+    //         .with_num_threads(match available_parallelism() {
+    //             Ok(threads)  => Some(usize::from(threads)),
+    //             Err(_) => None,
+    //         });
 
-    // Called every time a new frame is available.
-    fn on_frame_arrived(
-        &mut self,
-        frame: &mut Frame,
-        _capture_control: InternalCaptureControl,
-    ) -> Result<(), Self::Error> {
-        // print!( "\rRecording for: {} seconds\n",  self.start.elapsed().as_secs() );
-        io::stdout().flush()?;
-        // ! ENCODER: Send the frame to the video encoder
-        // self.encoder.as_mut().unwrap().send_frame(frame)?;
+    println!("Frame Time: {:?}", fps);
 
-        // * Handle incoming connections.
+    // ! Main loop
+    loop {
+
+        println!("Streaming since: {:?}", record_start.elapsed());
+
+        // * Handle incoming connections and disconnections
         let mut buffer = [0u8; 1];
 
-        match self.listener.recv_from(&mut buffer) {
+        match listener.recv_from(&mut buffer) {
             Ok((_amount, address)) => {
-                match buffer[0] {
-                    // No message
-                    0 => {}
+                match Actions::from(buffer[0]) {
+                    // Ping 
+                    Actions::Ping => {
+                        // listener.send_to(&[Actions::Ping as u8], address).expect("Failed to send pong");
+                    }
 
                     // New connection
-                    1 => {
+                    Actions::NewConnection => {
                         println!("Client Connected");
-                        self.clients.push(address);
+                        clients.push(address);
                     }
 
                     // Disconnection
-                    2 => {
+                    Actions::Disconnection => {
                         println!("Client Disconnected");
-                        self.clients.retain(|&x| x != address);
+                        clients.retain(|&x| x != address);
                     }
 
-                    _ => {
+                    Actions::Unknown => {
                         println!("Received Unknown Message: {} from {}", buffer[0], address);
                     }
                 }
             }
-            Err(_e) => {}
+            Err(_e) => {
+                // eprintln!("Error receiving from socket. Error: {:?}", _e);
+            }
         }
 
-        // println!("Connected Clients: {}", self.connected_count);
-
-        // No client -> No need to send frame
-        if self.clients.len() == 0 {
-            return Ok(());
+        if clients.len() == 0 {
+            println!("No clients connected");
+            // wait whole frame time
+            std::thread::sleep(fps);
+            continue;
         }
+        
+        // * Sending frames to clients
 
-        // * Prepare buffer for encoding
-        let mut buffer = frame.buffer().expect("Error getting frame buffer");
-        let width = buffer.width();
-        let height = buffer.height();
+        let start = std::time::Instant::now();
+        
+        // ! Frame Format
+        // The frame format is guaranteed to be packed BGRA.
+        // The width and height are guaranteed to remain constant.
+        // The stride might be greater than the width, and it may also vary between frames.
+        // Frame is just an array of bytes
+        let frame = match cap.frame() {
+            Ok(frame) => frame,
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::WouldBlock {
+                    // wait whole frame time
+                     std::thread::sleep(fps);
+                }
+                continue;
+            }
+        };
 
-        // * Encode frame as jpeg 
-        let bytes = ImageEncoder::new(ImageFormat::Jpeg, ColorFormat::Rgba8)
-            .encode(buffer.as_raw_nopadding_buffer()?, width, height)
-            .expect("Error encoding frame into jpeg");
 
-        // println!("Frame Size: {}", bytes.len());
+        let image = image::ImageBuffer::from_raw(width, height, frame.as_rgba()).expect("Error creating image buffer");
 
-        // * Compress frame
-        let image = turbojpeg::decompress(&bytes, turbojpeg::PixelFormat::RGBA).expect("Error decompressing frame");
+        println!("Frame Size: {}", frame.len());
 
-        let bytes = turbojpeg::compress(image.as_deref(), self.options.quality as i32, turbojpeg::Subsamp::Sub1x2).expect("Error compressing frame");
+        // * Encode & Compress frame as AVIF
+        // let res = encoder.encode_rgba(
+        //         ravif::Img::new(frame, width, height),
+        //     )
+        //     .expect("Error encoding frame");
 
-        // println!("Compressed Frame Size: {}", bytes.len());
+        let bytes = turbojpeg::compress_image(image, options.quality as i32, turbojpeg::Subsamp::Sub2x2);
+
+        println!("Compressed Frame Size: {}", bytes.len());
 
         let mut clients_to_remove: Vec<SocketAddr> = Vec::new();
 
         // Frame ID - unique identifier for the frame
-        let frame_id = self.start.elapsed().as_millis() as u32;
+        let frame_id = record_start.elapsed().as_millis() as u32;
 
         // * Send frame to all connected clients
-        for client in &self.clients {
+        for client in &clients {
     
             // * Frames are send on packets chunk size
             let chunk_size = Packet::CHUNK_SIZE;
@@ -150,9 +148,9 @@ impl GraphicsCaptureApiHandler for Capture {
                     data: chunk.to_vec(),
                 };
 
-                match self.listener.send_to(&packet.to_bytes(), client) {
+                match listener.send_to(&packet.to_bytes(), client) {
                     Ok(bytes_send) => {
-                        // println!("\nPacket {} : size {}", i, bytes_send);
+                        println!("\nPacket {} : size {}", i, bytes_send);
                     }
                     Err(e) => {
                         println!("Error sending packet to client: {}", e);
@@ -164,53 +162,20 @@ impl GraphicsCaptureApiHandler for Capture {
 
         }
 
-        // * Remove clients with errors
-        for client in clients_to_remove {
-            self.clients.retain(|&x| x != client);
+        if clients_to_remove.len() == clients.len() {
+            println!("All clients disconnected");
+            break;
         }
 
-        // * This code Stops the capture after seconds
-        // if self.start.elapsed().as_secs() >= 10 {
-        //     self.encoder.take().unwrap().finish()?;
-        //     capture_control.stop();
-        //     println!("REACHED STREAMING LIMIT");
-        // }
+        // * Remove clients with errors
+        for client in clients_to_remove {
+            clients.retain(|&x| x != client);
+        }
 
-        Ok(())
+        // * Wait for the rest of the frame time
+        let delta = start.elapsed();
+        if delta < fps {
+            std::thread::sleep(fps - delta);
+        }
     }
-
-    // Optional handler called when the capture item (usually a window) closes.
-    fn on_closed(&mut self) -> Result<(), Self::Error> {
-        println!("Capture Session Closed");
-        Ok(())
-    }
-}
-
-#[tokio::main]
-pub async fn run(options: commands::StartCmd) {
-    // Gets The Foreground Window, Checkout The Docs For Other Capture Items
-    let primary_monitor = Monitor::primary().expect("There is no primary monitor");
-
-    let settings = Settings::new(
-        // Item To Captue
-        primary_monitor,
-        // Capture Cursor Settings
-        CursorCaptureSettings::Default,
-        // Draw Borders Settings
-        DrawBorderSettings::Default,
-        // The desired color format for the captured frame.
-        ColorFormat::Rgba8,
-        // Additional flags for the capture settings that will be passed to user defined `new` function.
-        options.as_string(),
-    )
-    .unwrap();
-
-    // Starts the capture and takes control of the current thread.
-    // The errors from handler trait will end up here
-    match Capture::start(settings) {
-        Ok(_) => println!("Capture finished"),
-        Err(e) => eprintln!("Error when capturing {}", e),
-    }
-    // Stop the server
-    exit(0);
-}
+} 

@@ -20,22 +20,11 @@ pub struct StartCmd {
 
     #[arg(short, long, help="Resolution of the stream", default_value="1920x1080")]
     pub resolution: String, 
+
+    #[arg(long, default_value = "30", help = "Frames per second")]
+    pub fps: u8,
 }
 
-impl StartCmd {
-    pub fn as_string(&self) -> String {
-        format!("{}:{}:{}", self.port, self.quality, self.resolution)
-    }
-
-    pub fn parse(s: String) -> StartCmd {
-        let mut parts = s.split(':');
-        let port = parts.next().unwrap().parse().unwrap();
-        let quality = parts.next().unwrap().parse().unwrap();
-        let resolution = parts.next().unwrap().to_string();
-        StartCmd { port, quality, resolution }
-    }
-    
-}
 
 #[derive(Args)]
 pub struct ConnectCmd {

@@ -8,6 +8,7 @@ use std::{
 
 use crate::{
     frame_buffer::{FrameBuffer, GetFrameResult},
+    comm::Actions,
     packet::Packet,
 };
 use ggez::{
@@ -16,6 +17,7 @@ use ggez::{
     graphics::{self, DrawParam, Drawable},
     Context, GameResult,
 };
+ 
 
 struct MainState {
     texture: Option<graphics::Image>,
@@ -42,12 +44,17 @@ impl MainState {
 
 impl event::EventHandler<ggez::GameError> for MainState {
     fn quit_event(&mut self, _ctx: &mut Context) -> Result<bool, ggez::GameError> {
+        // Send disconnection notification
+        self.socket
+            .send(&[Actions::Disconnection as u8])
+            .expect("Error sending disconnection notification to server");
+
         return Ok(false);
     }
 
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         // Check if stream is still open
-        if self.socket.send(&[0u8; 1]).is_err() {
+        if self.socket.send(&[Actions::Ping as u8]).is_err() {
             println!("Stream is closed");
             exit(0);
         }
@@ -57,7 +64,7 @@ impl event::EventHandler<ggez::GameError> for MainState {
 
         match self.socket.recv(&mut buffer) {
             Ok(bytes_read) => {
-                // println!("Bytes read: {}", bytes_read);
+                println!("Bytes read: {}", bytes_read);
 
                 // No bytes read means server closed the connection
                 if bytes_read == 0 {
@@ -66,7 +73,7 @@ impl event::EventHandler<ggez::GameError> for MainState {
                 }
                 // If not even minimum bytes are read
                 else if bytes_read < Packet::META_SIZE {
-                    eprintln!("Invalid packet received");
+                    eprintln!("Invalid packet received, Expected at least: {} bytes, recieved: {}", Packet::META_SIZE, bytes_read);
                     return Ok(());
                 }
 
@@ -109,9 +116,7 @@ impl event::EventHandler<ggez::GameError> for MainState {
                     }
                     io::ErrorKind::ConnectionReset => {
                         println!("Connection reset by server");
-                        self.socket
-                            .send(&[0u8; 1])
-                            .expect("Error sending connection reset notification to server");
+                        exit(0);
                     }
                     _ => {
                         eprintln!("Error receiving data: {:?}", e);
@@ -206,7 +211,7 @@ pub fn run(address: String) -> GameResult {
 
     // 1 = Connection notification
     socket
-        .send(&[1u8; 1])
+        .send(&[Actions::NewConnection as u8])
         .expect("Error sending connection notification to server");
 
     println!("Connected to: {}", address);
