@@ -8,10 +8,6 @@ use crate::comm::Actions;
 use crate::commands;
 use crate::packet::Packet;
 
-use rgb::*;
-
-use std::thread::available_parallelism;
-
 pub fn run(options: commands::StartCmd) {
     let mut cap = Capturer::new(
         Display::primary()
@@ -47,6 +43,8 @@ pub fn run(options: commands::StartCmd) {
     //         });
 
     println!("Frame Time: {:?}", fps);
+
+    let mut clients_to_remove: Vec<SocketAddr> = Vec::new();
 
     // ! Main loop
     loop {
@@ -113,7 +111,6 @@ pub fn run(options: commands::StartCmd) {
             }
         };
 
-
         let image = Image {
             pixels: &*frame,
             width,
@@ -134,7 +131,6 @@ pub fn run(options: commands::StartCmd) {
 
         println!("Compressed Frame Size: {}", bytes.len());
 
-        let mut clients_to_remove: Vec<SocketAddr> = Vec::new();
 
         // Frame ID - unique identifier for the frame
         let frame_id = record_start.elapsed().as_millis() as u32;
@@ -174,8 +170,11 @@ pub fn run(options: commands::StartCmd) {
         }
 
         // * Remove clients with errors
-        for client in clients_to_remove {
-            clients.retain(|&x| x != client);
+        if clients_to_remove.len() > 0 {
+            for client in &clients_to_remove {
+                clients.retain(|&x| x != *client);
+            }
+            clients_to_remove.clear();
         }
 
         // * Wait for the rest of the frame time
