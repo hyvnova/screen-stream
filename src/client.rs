@@ -64,7 +64,7 @@ impl event::EventHandler<ggez::GameError> for MainState {
 
         match self.socket.recv(&mut buffer) {
             Ok(bytes_read) => {
-                println!("Bytes read: {}", bytes_read);
+                // println!("Bytes read: {}", bytes_read);
 
                 // No bytes read means server closed the connection
                 if bytes_read == 0 {

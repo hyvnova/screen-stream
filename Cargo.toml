@@ -16,7 +16,7 @@ opt-level = 3
 image = "0.24.1"
 clap = { version = "4.5.4", features = ["derive"] }
 ggez = "0.9.3"
-scrap = "0.5.0"
 ravif = "0.11.5"
 rgb = "0.8.37"
 turbojpeg = {version="1.1.0", features = ["image"]}
+captrs = "0.3.1"

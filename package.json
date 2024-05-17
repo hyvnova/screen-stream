@@ -1,0 +1,10 @@
+{
+    "name": "screen_stream",
+    "scripts": {
+        "server" : ".\\target\\debug\\screen-stream.exe start",
+        "client" : ".\\target\\debug\\screen-stream.exe connect 127.0.0.1:8080",
+        "build" : "cargo build --release",
+        "r-server" : ".\\target\\release\\screen-stream start",
+        "r-client" : ".\\target\\release\\screen-stream connect 127.0.0.1:8080"
+    }
+}

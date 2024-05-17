@@ -1,24 +1,25 @@
+use std::io::Write;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
-use scrap::{Capturer, Display};
 use turbojpeg::{Image, PixelFormat, compress};
 
 use crate::comm::Actions;
 use crate::commands;
 use crate::packet::Packet;
 
-pub fn run(options: commands::StartCmd) {
-    let mut cap = Capturer::new(
-        Display::primary()
-        .expect("Failed to find primary display")
-    ).expect("Failed to create capturer");
+use captrs::{Capturer, CaptureError, Bgr8};
 
+pub fn run(options: commands::StartCmd) {
+    let mut cap = Capturer::new(0).expect("Failed to create capturer");
+
+    let (width, height) = cap.geometry();
 
     let listener = UdpSocket::bind(format!("0.0.0.0:{}", options.port))
         .expect("While creating UdpSocket: Error binding to port");
 
     let mut clients = Vec::new(); // Connected clients
+    let mut clients_to_remove: Vec<SocketAddr> = Vec::new(); // Used to remove clients with errors during mainloop
 
     listener
         .set_nonblocking(true)
@@ -26,14 +27,11 @@ pub fn run(options: commands::StartCmd) {
 
     println!("Server listening on port: {}", options.port);
 
-    
-    let width = cap.width();
-    let height = cap.height();
 
     let fps = Duration::from_millis(1000u64 / (options.fps as u64)); // Frame time
     let record_start = std::time::Instant::now(); // Time since recording started
 
-    // ! AVIF Encoder -- Very slow
+    // ! AVIF Encoder -- Very slow 
     // let encoder = ravif::Encoder::new()
     //         .with_quality(options.quality as f32)
     //         .with_speed(10)
@@ -44,12 +42,12 @@ pub fn run(options: commands::StartCmd) {
 
     println!("Frame Time: {:?}", fps);
 
-    let mut clients_to_remove: Vec<SocketAddr> = Vec::new();
-
     // ! Main loop
     loop {
+        // Flush stdout
+        std::io::stdout().flush().unwrap();
 
-        println!("Streaming since: {:?}", record_start.elapsed());
+        print!("\rStreaming since: {:#}\t", record_start.elapsed().as_secs_f64());
 
         // * Handle incoming connections and disconnections
         let mut buffer = [0u8; 1];
@@ -85,7 +83,7 @@ pub fn run(options: commands::StartCmd) {
         }
 
         if clients.len() == 0 {
-            println!("No clients connected");
+            // println!("No clients connected");
             // wait whole frame time
             std::thread::sleep(fps);
             continue;
@@ -93,41 +91,48 @@ pub fn run(options: commands::StartCmd) {
         
         // * Sending frames to clients
 
-        let start = std::time::Instant::now();
+        // let start = std::time::Instant::now();
         
-        // ! Frame Format
-        // The frame format is guaranteed to be packed BGRA.
-        // The width and height are guaranteed to remain constant.
-        // The stride might be greater than the width, and it may also vary between frames.
-        // Frame is just an array of bytes
-        let frame = match cap.frame() {
+        let frame: Vec<Bgr8> = match cap.capture_frame() {
             Ok(frame) => frame,
             Err(err) => {
-                if err.kind() == std::io::ErrorKind::WouldBlock {
-                    // wait whole frame time
-                     std::thread::sleep(fps);
+                match err {
+                    // Skip these errors
+                    CaptureError::AccessDenied 
+                    | CaptureError::Timeout 
+                    | CaptureError::RefreshFailure
+                    | CaptureError::AccessLost
+                    => { continue; }
+
+                    // Serious errors
+                    CaptureError::Fail(e) => {
+                        eprintln!("Error capturing frame: {}", e);
+                        continue;
+                    }
                 }
-                continue;
             }
         };
 
+
+        // Covert frame: Vec of BGR8 to &[u8]. A &[u8] is required for turbojpeg to create an image...
+        // BGR8 is just a struct with 3 u8 values
+        let bytes = frame
+                            .iter()
+                            .flat_map(|x| vec![x.b, x.g, x.r])
+                            .collect::<Vec<u8>>();
+
         let image = Image {
-            pixels: &*frame,
-            width,
-            height,
-            format: PixelFormat::BGRX,
-            pitch: width * PixelFormat::BGRX.size(),
+            pixels: bytes.as_slice(),
+            width: width as usize,
+            height: height as usize,
+            format: PixelFormat::BGR,
+            pitch: (width as usize) * PixelFormat::BGR.size(),
         };
 
-        println!("Frame Size: {}", frame.len());
+        println!("Frame Size: {}", frame.len()); 
 
-        // * Encode & Compress frame as AVIF
-        // let res = encoder.encode_rgba(
-        //         ravif::Img::new(frame, width, height),
-        //     )
-        //     .expect("Error encoding frame");
-
-        let bytes = compress(image, options.quality as i32, turbojpeg::Subsamp::Sub2x2).expect("Error compressing image");
+        // Bytes that will be sent to the clients
+        let bytes = compress(image, options.quality as i32, turbojpeg::Subsamp::Sub2x2).expect("Error compressing image"); 
 
         println!("Compressed Frame Size: {}", bytes.len());
 
@@ -178,9 +183,10 @@ pub fn run(options: commands::StartCmd) {
         }
 
         // * Wait for the rest of the frame time
-        let delta = start.elapsed();
-        if delta < fps {
-            std::thread::sleep(fps - delta);
-        }
+        // let delta = start.elapsed();
+        // if delta < fps {
+        //     std::thread::sleep(fps - delta);
+        // }
+
     }
 } 
