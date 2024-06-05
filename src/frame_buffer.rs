@@ -68,8 +68,6 @@ impl FrameBuffer {
         self.add_packet_to_frame(packet);
     }    
 
-
-
     /// Get the oldest frame
     /// If frame buffer is not *complete* next oldest frame will be returned
     /// A complete frame is that whose last packet data size is lass than Packet::CHUNK_SIZE
@@ -108,8 +106,7 @@ impl FrameBuffer {
         {
             return GetFrameResult::NonSequential(packets.to_vec());
         }
-
-
+        
         // Create frame buffer
         let buffer_size = packets
             .iter()
@@ -130,7 +127,6 @@ impl FrameBuffer {
 
         return GetFrameResult::Ok(buffer);
     }
-
 
     /// Returns the number of frames in the buffer
     pub fn len(&self) -> usize {

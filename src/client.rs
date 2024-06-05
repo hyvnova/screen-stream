@@ -1,14 +1,8 @@
-#![allow(clippy::unnecessary_wraps)]
-
-use std::{
-    io,
-    net::UdpSocket,
-    process::exit,
-};
+use std::{io, net::UdpSocket, process::exit, sync::{Arc, Mutex}};
 
 use crate::{
-    frame_buffer::{FrameBuffer, GetFrameResult},
     comm::Actions,
+    frame_buffer::{FrameBuffer, GetFrameResult},
     packet::Packet,
 };
 use ggez::{
@@ -17,55 +11,60 @@ use ggez::{
     graphics::{self, DrawParam, Drawable},
     Context, GameResult,
 };
- 
+
+type Shared<T> = Arc<Mutex<T>>;
 
 struct MainState {
     texture: Option<graphics::Image>,
-    frames: FrameBuffer,
-    socket: UdpSocket
+    frames: Shared<FrameBuffer>,
+    socket: Shared<UdpSocket>,
+    process_handle: tokio::task::JoinHandle<()>, // Handle to the socket process. Used to stop the process when the game is closed
 }
 
 impl MainState {
-    fn new(socket:UdpSocket, _ctx: &mut Context) -> GameResult<MainState> {
-        _ctx.gfx
+    fn new(socket: UdpSocket, ctx: &mut Context) -> GameResult<MainState> {
+        ctx.gfx
             .set_resizable(true)
             .expect("Error setting window to resizable");
-        _ctx.gfx.set_window_title("Screen Stream Client");
-
         
+        ctx.gfx.set_window_title("Screen Stream Client");
 
-        Ok(MainState { 
+        let shared_socket: Shared<UdpSocket> = Arc::new(Mutex::new(socket));
+        let mut shared_frames: Shared<FrameBuffer> = Arc::new(Mutex::new(FrameBuffer::new()));
+        
+        // UdpSocket proces
+        let handle = tokio::spawn(async move {
+            handle_socket(shared_socket.clone(), shared_frames.clone()).await;
+        });
+        
+        Ok(MainState {
             texture: None,
-            frames: FrameBuffer::new(),
-            socket
+            frames: shared_frames,
+            socket: shared_socket,
+            process_handle: handle,
         })
     }
 }
 
-impl event::EventHandler<ggez::GameError> for MainState {
-    fn quit_event(&mut self, _ctx: &mut Context) -> Result<bool, ggez::GameError> {
-        // Send disconnection notification
-        self.socket
-            .send(&[Actions::Disconnection as u8])
-            .expect("Error sending disconnection notification to server");
+/// Receive data from the server
+async fn handle_socket(shared_socket: Shared<UdpSocket>, shared_frames: Shared<FrameBuffer>) {
+    
+    // * Frame will be sent in packets of CHUNK_SIZE
+    let mut buffer = [0u8; Packet::CHUNK_SIZE * 1];
 
-        return Ok(false);
-    }
-
-    fn update(&mut self, ctx: &mut Context) -> GameResult {
-        // Check if stream is still open
-        if self.socket.send(&[Actions::Ping as u8]).is_err() {
-            println!("Stream is closed");
-            exit(0);
-        }
-
-        // * Frame will be sent in packets of CHUNK_SIZE
-        let mut buffer = [0u8; 65000 * 1];
-
-        match self.socket.recv(&mut buffer) {
+    loop {
+        let socket = match shared_socket.lock() {
+            Ok(socket) => socket,
+            Err(e) => {
+                eprintln!("Error locking socket: {:?}", e);
+                continue;
+            }
+        };
+        
+        match socket.recv(&mut buffer) {
             Ok(bytes_read) => {
                 // println!("Bytes read: {}", bytes_read);
-
+    
                 // No bytes read means server closed the connection
                 if bytes_read == 0 {
                     println!("Server closed the connection");
@@ -73,41 +72,23 @@ impl event::EventHandler<ggez::GameError> for MainState {
                 }
                 // If not even minimum bytes are read
                 else if bytes_read < Packet::META_SIZE {
-                    eprintln!("Invalid packet received, Expected at least: {} bytes, recieved: {}", Packet::META_SIZE, bytes_read);
-                    return Ok(());
+                    eprintln!(
+                        "Invalid packet received, Expected at least: {} bytes, recieved: {}",
+                        Packet::META_SIZE,
+                        bytes_read
+                    );
+                    continue;
                 }
-
+    
                 if bytes_read <= Packet::CHUNK_SIZE {
                     let packet = Packet::from_bytes(buffer[..bytes_read].to_vec());
                     // println!(
                     //     "Single packet received frame: {} index: {}",
                     //     packet.frame_id, packet.index
                     // );
-
-                    self.frames.add_packet(packet);
+    
+                    shared_frames.lock().unwrap().add_packet(packet);
                 }
-
-                // // * If multiple packets are received
-                // // Split the buffer into packets
-                // let mut index = 0;
-                // while index < bytes_read {
-                //     // At least meta size bytes are required
-                //     if index + Packet::META_SIZE > bytes_read {
-                //         break;
-                //     }
-
-                //     let end = std::cmp::min(index + Packet::CHUNK_SIZE, bytes_read);
-                //     let packet = Packet::from_bytes(buffer[index..end].to_vec());
-
-                //     self.frames.add_packet(packet);
-
-                //     index = end;
-
-                //     // If last packet is less than 4096 bytes
-                //     if end == bytes_read {
-                //         break;
-                //     }
-                // }
             }
             Err(e) => {
                 match e.kind() {
@@ -125,17 +106,35 @@ impl event::EventHandler<ggez::GameError> for MainState {
                 }
             }
         }
+    }
+
+}
+
+impl event::EventHandler<ggez::GameError> for MainState {
+    fn quit_event(&mut self, _ctx: &mut Context) -> Result<bool, ggez::GameError> {
+        // Send disconnection notification
+        self.socket.lock().unwrap().send(&[Actions::Disconnection as u8])
+            .expect("Error sending disconnection notification to server");
+
+        return Ok(false);
+    }
+
+    fn update(&mut self, ctx: &mut Context) -> GameResult {
+        // Check if stream is still open
+        if self.socket.lock().unwrap().send(&[Actions::Ping as u8]).is_err() {
+            println!("Stream is closed");
+            self.process_handle.abort();
+            exit(0);
+        }
 
         // No frames -> return
-        if self.frames.len() == 0 {
+        if self.frames.lock().unwrap().len() == 0 {
             return Ok(());
         }
 
         // println!("Frame buffer count: {}", self.frames.len());
 
-        // Sort frames by frame_id (low to high)
-
-        let buffer = match self.frames.get_frame() {
+        let buffer = match self.frames.lock().unwrap().get_frame() {
             GetFrameResult::NoFrame => {
                 return Ok(());
             }
@@ -145,7 +144,6 @@ impl event::EventHandler<ggez::GameError> for MainState {
                     "Not sequential packet: {:?}",
                     packets.iter().map(|p| p.index).collect::<Vec<u8>>()
                 );
-
                 return Ok(());
             }
 
@@ -188,9 +186,7 @@ impl event::EventHandler<ggez::GameError> for MainState {
                     }),
             );
         }
-
         canvas.finish(ctx)?;
-
         Ok(())
     }
 }
@@ -199,11 +195,12 @@ pub fn run(address: String) -> GameResult {
     let cb: ggez::ContextBuilder = ggez::ContextBuilder::new("ss-client", "nova");
     let (mut ctx, event_loop) = cb.build()?;
 
+    let socket: UdpSocket =
+        UdpSocket::bind(format!("0.0.0.0:{}", 8899)).expect("Error binding to address");
 
-    let socket: UdpSocket = UdpSocket::bind(format!("0.0.0.0:{}", 8899))
-        .expect("Error binding to address");
-
-    socket.set_nonblocking(true).expect("Error setting socket to non-blocking");
+    socket
+        .set_nonblocking(true)
+        .expect("Error setting socket to non-blocking");
 
     socket
         .connect(&address)

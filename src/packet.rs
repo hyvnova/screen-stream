@@ -8,8 +8,9 @@ pub struct Packet {
 }
 
 impl Packet {
+    // Size of non-data fields: index and frame_id
     pub const META_SIZE : usize = 5;
-    
+
     // Limit 65507
     pub const CHUNK_SIZE : usize = 65000;
 
@@ -47,7 +48,7 @@ impl PartialOrd for Packet {
 }
 
 impl PartialEq for Packet {
-    fn eq(&self, other: &Self) -> bool {    
+    fn eq(&self, other: &Self) -> bool {
         self.index == other.index && self.frame_id == other.frame_id
     }
 }
