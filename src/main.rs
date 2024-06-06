@@ -22,13 +22,14 @@ struct Cli {
     cmd: Cmds,
 }
 
-
-fn main() {
+#[tokio::main]
+async fn main() {
+    
     let cli = Cli::parse();
 
     match cli.cmd {
         Cmds::Start(options) => {
-            server::run(options);
+            server::run(options).await;
         }
 
         Cmds::Connect(connect) => {

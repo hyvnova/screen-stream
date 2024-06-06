@@ -1,9 +1,10 @@
-use std::{io, net::UdpSocket, process::exit, sync::{Arc, Mutex}};
+use std::{io, net::UdpSocket, process::exit};
 
 use crate::{
     comm::Actions,
     frame_buffer::{FrameBuffer, GetFrameResult},
     packet::Packet,
+    shared::{Shared, shard}
 };
 use ggez::{
     event,
@@ -11,8 +12,6 @@ use ggez::{
     graphics::{self, DrawParam, Drawable},
     Context, GameResult,
 };
-
-type Shared<T> = Arc<Mutex<T>>;
 
 struct MainState {
     texture: Option<graphics::Image>,
@@ -29,12 +28,13 @@ impl MainState {
         
         ctx.gfx.set_window_title("Screen Stream Client");
 
-        let shared_socket: Shared<UdpSocket> = Arc::new(Mutex::new(socket));
-        let mut shared_frames: Shared<FrameBuffer> = Arc::new(Mutex::new(FrameBuffer::new()));
+        let shared_socket: Shared<UdpSocket> = shard!(socket);
+        let shared_frames: Shared<FrameBuffer> = shard!(FrameBuffer::new());
         
         // UdpSocket proces
-        let handle = tokio::spawn(async move {
-            handle_socket(shared_socket.clone(), shared_frames.clone()).await;
+        let handle = tokio::spawn({
+            let args = (shared_socket.clone(), shared_frames.clone() );            
+            async move { handle_socket(args.0, args.1).await; }
         });
         
         Ok(MainState {
@@ -53,14 +53,7 @@ async fn handle_socket(shared_socket: Shared<UdpSocket>, shared_frames: Shared<F
     let mut buffer = [0u8; Packet::CHUNK_SIZE * 1];
 
     loop {
-        let socket = match shared_socket.lock() {
-            Ok(socket) => socket,
-            Err(e) => {
-                eprintln!("Error locking socket: {:?}", e);
-                continue;
-            }
-        };
-        
+        let socket =  shared_socket.consume();
         match socket.recv(&mut buffer) {
             Ok(bytes_read) => {
                 // println!("Bytes read: {}", bytes_read);
@@ -87,7 +80,7 @@ async fn handle_socket(shared_socket: Shared<UdpSocket>, shared_frames: Shared<F
                     //     packet.frame_id, packet.index
                     // );
     
-                    shared_frames.lock().unwrap().add_packet(packet);
+                    shared_frames.consume().add_packet(packet);
                 }
             }
             Err(e) => {
@@ -107,7 +100,6 @@ async fn handle_socket(shared_socket: Shared<UdpSocket>, shared_frames: Shared<F
             }
         }
     }
-
 }
 
 impl event::EventHandler<ggez::GameError> for MainState {

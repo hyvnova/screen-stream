@@ -15,7 +15,7 @@ pub struct StartCmd {
     #[arg(short, long, default_value = "8080")]
     pub port: u16,
 
-    #[arg(short, long, default_value = "25", help = "Quality of the stream")]
+    #[arg(short, long, default_value = "10", help = "Quality of the stream")]
     pub quality: u8, 
 
     #[arg(short, long, help="Resolution of the stream", default_value="1920x1080")]
